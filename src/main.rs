@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use inquire::{Select, Text, validator::Validation};
+use inquire::{Select, Text, validator::Validation, Confirm};
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,6 +49,10 @@ enum Commands {
         /// Modo nao-interativo (usa ordem alfabetica)
         #[arg(short, long)]
         no_interactive: bool,
+
+        /// Nao editar nomes das musicas
+        #[arg(short, long)]
+        no_edit: bool,
     },
 
     /// Renomeia arquivos de musica em uma pasta especifica
@@ -65,6 +69,12 @@ enum Commands {
         #[arg(short, long)]
         dry_run: bool,
     },
+}
+
+#[derive(Clone)]
+struct MusicaInfo {
+    arquivo_original: PathBuf,
+    nome_editado: String,
 }
 
 fn main() {
@@ -84,6 +94,7 @@ fn main() {
             dry_run,
             mover,
             no_interactive,
+            no_edit,
         } => {
             let base_path = pasta.clone().unwrap_or_else(obter_pasta_musicas);
             
@@ -128,7 +139,7 @@ fn main() {
                 }
             };
 
-            organizar_album(&base_path, &artista, &album, *dry_run, *mover, *no_interactive);
+            organizar_album(&base_path, &artista, &album, *dry_run, *mover, *no_interactive, *no_edit);
         }
         Commands::Renomear {
             pasta,
@@ -219,7 +230,7 @@ fn listar_musicas(pasta: &str) {
     println!("  dandelion organizar");
 }
 
-fn organizar_album(base_path: &str, artista: &str, album: &str, dry_run: bool, mover: bool, no_interactive: bool) {
+fn organizar_album(base_path: &str, artista: &str, album: &str, dry_run: bool, mover: bool, no_interactive: bool, no_edit: bool) {
     let origem = format!("{}/Desconhecido", base_path);
     let destino = format!("{}/{} - {}", base_path, artista, album);
 
@@ -252,11 +263,17 @@ fn organizar_album(base_path: &str, artista: &str, album: &str, dry_run: bool, m
         return;
     }
 
-    // Modo interativo: permitir reordenação
-    let arquivos_ordenados = if !no_interactive {
-        reordenar_arquivos_interativo(arquivos)
+    // Modo interativo: permitir reordenação e edição
+    let musicas_ordenadas = if !no_interactive {
+        reordenar_e_editar_arquivos(arquivos, !no_edit)
     } else {
-        arquivos
+        arquivos.into_iter().map(|a| {
+            let nome = a.file_stem().unwrap().to_str().unwrap().to_string();
+            MusicaInfo {
+                arquivo_original: a,
+                nome_editado: nome,
+            }
+        }).collect()
     };
 
     // Criar pasta de destino
@@ -273,27 +290,22 @@ fn organizar_album(base_path: &str, artista: &str, album: &str, dry_run: bool, m
     println!("\nProcessando arquivos...\n");
 
     // Processar cada arquivo
-    for (idx, arquivo_origem) in arquivos_ordenados.iter().enumerate() {
-        let nome_original = arquivo_origem.file_name().unwrap().to_str().unwrap();
-        let extensao = arquivo_origem.extension().unwrap().to_str().unwrap();
-
-        // Extrair nome da musica (remover extensao)
-        let nome_musica = nome_original
-            .trim_end_matches(&format!(".{}", extensao))
-            .trim();
+    for (idx, musica) in musicas_ordenadas.iter().enumerate() {
+        let nome_original = musica.arquivo_original.file_name().unwrap().to_str().unwrap();
+        let extensao = musica.arquivo_original.extension().unwrap().to_str().unwrap();
 
         // Criar novo nome no formato: 01 - Artista - Nome da Musica.mp3
         let numero = format!("{:02}", idx + 1);
-        let novo_nome = format!("{} - {} - {}.{}", numero, artista, nome_musica, extensao);
+        let novo_nome = format!("{} - {} - {}.{}", numero, artista, musica.nome_editado, extensao);
         let arquivo_destino = PathBuf::from(&destino).join(&novo_nome);
 
         if dry_run {
             println!("  [DRY-RUN] {} -> {}", nome_original, novo_nome);
         } else {
             let resultado = if mover {
-                fs::rename(arquivo_origem, &arquivo_destino)
+                fs::rename(&musica.arquivo_original, &arquivo_destino)
             } else {
-                fs::copy(arquivo_origem, &arquivo_destino).map(|_| ())
+                fs::copy(&musica.arquivo_original, &arquivo_destino).map(|_| ())
             };
 
             match resultado {
@@ -304,23 +316,32 @@ fn organizar_album(base_path: &str, artista: &str, album: &str, dry_run: bool, m
     }
 
     println!("\nProcesso concluido!");
-    println!("Total: {} arquivos processados", arquivos_ordenados.len());
+    println!("Total: {} arquivos processados", musicas_ordenadas.len());
 }
 
-fn reordenar_arquivos_interativo(mut arquivos: Vec<PathBuf>) -> Vec<PathBuf> {
+fn reordenar_e_editar_arquivos(arquivos: Vec<PathBuf>, permitir_edicao: bool) -> Vec<MusicaInfo> {
     println!("Modo interativo - Reordene as musicas");
     println!("-------------------------------------\n");
 
-    let mut arquivos_finais: Vec<PathBuf> = Vec::new();
-    let mut disponiveis = arquivos.clone();
+    let mut musicas_finais: Vec<MusicaInfo> = Vec::new();
+    let mut disponiveis: Vec<MusicaInfo> = arquivos
+        .into_iter()
+        .map(|a| {
+            let nome = a.file_stem().unwrap().to_str().unwrap().to_string();
+            MusicaInfo {
+                arquivo_original: a,
+                nome_editado: nome,
+            }
+        })
+        .collect();
 
     while !disponiveis.is_empty() {
-        let posicao_atual = arquivos_finais.len() + 1;
+        let posicao_atual = musicas_finais.len() + 1;
         
         // Criar opções para o menu
         let opcoes: Vec<String> = disponiveis
             .iter()
-            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
+            .map(|m| m.nome_editado.clone())
             .collect();
 
         println!("\nEscolha a musica #{} (ou Ctrl+C para cancelar):", posicao_atual);
@@ -333,9 +354,32 @@ fn reordenar_arquivos_interativo(mut arquivos: Vec<PathBuf>) -> Vec<PathBuf> {
             Ok(selecionado) => {
                 // Encontrar o índice do arquivo selecionado
                 if let Some(idx) = opcoes.iter().position(|x| x == &selecionado) {
-                    let arquivo = disponiveis.remove(idx);
-                    arquivos_finais.push(arquivo);
-                    println!("[OK] Adicionado: {}", selecionado);
+                    let mut musica = disponiveis.remove(idx);
+                    
+                    // Perguntar se quer editar o nome
+                    if permitir_edicao {
+                        match Confirm::new(&format!("Editar nome da musica '{}'?", musica.nome_editado))
+                            .with_default(false)
+                            .prompt() {
+                            Ok(true) => {
+                                match Text::new("Novo nome:")
+                                    .with_default(&musica.nome_editado)
+                                    .prompt() {
+                                    Ok(novo_nome) => {
+                                        if !novo_nome.trim().is_empty() {
+                                            musica.nome_editado = novo_nome.trim().to_string();
+                                            println!("[OK] Nome atualizado para: {}", musica.nome_editado);
+                                        }
+                                    }
+                                    Err(_) => {}
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    
+                    println!("[OK] Adicionado: {}", musica.nome_editado);
+                    musicas_finais.push(musica);
                 }
             }
             Err(_) => {
@@ -348,14 +392,13 @@ fn reordenar_arquivos_interativo(mut arquivos: Vec<PathBuf>) -> Vec<PathBuf> {
     println!("\n-------------------------------------");
     println!("Ordem final das musicas:\n");
     
-    for (idx, arquivo) in arquivos_finais.iter().enumerate() {
-        let nome = arquivo.file_name().unwrap().to_str().unwrap();
-        println!("  {:02}. {}", idx + 1, nome);
+    for (idx, musica) in musicas_finais.iter().enumerate() {
+        println!("  {:02}. {}", idx + 1, musica.nome_editado);
     }
     
     println!("\n-------------------------------------\n");
 
-    arquivos_finais
+    musicas_finais
 }
 
 fn renomear_musicas(pasta: &str, artista: &str, dry_run: bool) {
