@@ -16,9 +16,8 @@ Para organizá-las você precisa:
 2. Criar manualmente uma pasta `<Artista> - <Album>`
 3. Copiar/mover todos os arquivos
 4. **Decidir a ordem correta das músicas**
-5. Renomear **um por um** no formato `01 - Artista - Nome da Musica.mp3`
 
-Os passos 4 e 5 são **extremamente tediosos**.
+O passo 4 era **extremamente tedioso**.
 
 ## A Solução
 
