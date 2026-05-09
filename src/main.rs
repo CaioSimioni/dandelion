@@ -179,7 +179,7 @@ fn obter_pasta_musicas() -> String {
 
     // Fallback: tentar detectar pelo diretorio home do WSL
     if let Ok(home) = std::env::var("HOME") {
-        let username = home.split('/').last().unwrap_or("user");
+        let username = home.split('/').next_back().unwrap_or("user");
         let caminho = format!("/mnt/c/Users/{}/Music", username);
         if Path::new(&caminho).exists() {
             return caminho;
@@ -374,25 +374,17 @@ fn reordenar_e_editar_arquivos(arquivos: Vec<PathBuf>, permitir_edicao: bool) ->
                     let mut musica = disponiveis.remove(idx);
                     
                     // Perguntar se quer editar o nome
-                    if permitir_edicao {
-                        match Confirm::new(&format!("Editar nome da musica '{}'?", musica.nome_editado))
+                    if permitir_edicao
+                        && let Ok(true) = Confirm::new(&format!("Editar nome da musica '{}'?", musica.nome_editado))
                             .with_default(false)
-                            .prompt() {
-                            Ok(true) => {
-                                match Text::new("Novo nome:")
-                                    .with_default(&musica.nome_editado)
-                                    .prompt() {
-                                    Ok(novo_nome) => {
-                                        if !novo_nome.trim().is_empty() {
-                                            musica.nome_editado = novo_nome.trim().to_string();
-                                            println!("[OK] Nome atualizado para: {}", musica.nome_editado);
-                                        }
-                                    }
-                                    Err(_) => {}
-                                }
-                            }
-                            _ => {}
-                        }
+                            .prompt()
+                        && let Ok(novo_nome) = Text::new("Novo nome:")
+                            .with_default(&musica.nome_editado)
+                            .prompt()
+                        && !novo_nome.trim().is_empty()
+                    {
+                        musica.nome_editado = novo_nome.trim().to_string();
+                        println!("[OK] Nome atualizado para: {}", musica.nome_editado);
                     }
                     
                     println!("[OK] Adicionado: {}", musica.nome_editado);
