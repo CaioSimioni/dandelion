@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   version-bump:
     name: Verificar nova versao
@@ -72,7 +75,7 @@ jobs:
         run: cargo build --locked
 
       - name: Rodar testes
-        run: cargo test --locked -- --test-output immediate
+        run: cargo test --locked -- --show-output
 
       - name: Verificar warnings (clippy)
         run: cargo clippy --locked -- -D warnings
