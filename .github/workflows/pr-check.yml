@@ -1,0 +1,78 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  version-bump:
+    name: Verificar nova versao
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Obter versao atual (PR)
+        id: pr_version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Versao no PR: $VERSION"
+
+      - name: Obter versao da main
+        id: main_version
+        run: |
+          git fetch origin main
+          VERSION=$(git show origin/main:Cargo.toml | grep '^version' | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Versao na main: $VERSION"
+
+      - name: Comparar versoes
+        run: |
+          PR="${{ steps.pr_version.outputs.version }}"
+          MAIN="${{ steps.main_version.outputs.version }}"
+          echo "PR: $PR  |  main: $MAIN"
+          if [ "$PR" = "$MAIN" ]; then
+            echo "ERRO: A versao em Cargo.toml ($PR) e identica a da main. Atualize a versao antes do merge."
+            exit 1
+          fi
+          # Verifica se a versao do PR e maior (ordenacao semantica simples via sort -V)
+          MAIOR=$(printf '%s\n' "$PR" "$MAIN" | sort -V | tail -1)
+          if [ "$MAIOR" != "$PR" ]; then
+            echo "ERRO: A versao do PR ($PR) nao e maior que a da main ($MAIN)."
+            exit 1
+          fi
+          echo "OK: Versao corretamente incrementada ($MAIN -> $PR)"
+
+  build-and-test:
+    name: Build e testes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Rust estavel
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de dependencias
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Compilar
+        run: cargo build --locked
+
+      - name: Rodar testes
+        run: cargo test --locked -- --test-output immediate
+
+      - name: Verificar warnings (clippy)
+        run: cargo clippy --locked -- -D warnings

@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 #[derive(Parser)]
 #[command(name = "dandelion")]
 #[command(about = "Dandelion - Gerenciador de musicas", long_about = None)]
-#[command(version = "0.1.0")]
+#[command(version = "0.2.0")]
 #[command(author = "CaioSimioni")]
 struct Cli {
     #[command(subcommand)]
@@ -66,6 +66,17 @@ enum Commands {
         artista: String,
 
         /// Modo dry-run (mostra o que seria feito sem executar)
+        #[arg(short, long)]
+        dry_run: bool,
+    },
+
+    /// Remove os arquivos de musica da pasta Desconhecido apos organizar
+    Limpar {
+        /// Caminho da pasta (padrao: /mnt/c/Users/<user>/Music/Desconhecido)
+        #[arg(short, long)]
+        pasta: Option<String>,
+
+        /// Modo dry-run (mostra o que seria removido sem executar)
         #[arg(short, long)]
         dry_run: bool,
     },
@@ -147,6 +158,12 @@ fn main() {
             dry_run,
         } => {
             renomear_musicas(pasta, artista, *dry_run);
+        }
+        Commands::Limpar { pasta, dry_run } => {
+            let caminho = pasta
+                .clone()
+                .unwrap_or_else(|| format!("{}/Desconhecido", obter_pasta_musicas()));
+            limpar_desconhecido(&caminho, *dry_run);
         }
     }
 }
@@ -466,6 +483,70 @@ fn renomear_musicas(pasta: &str, artista: &str, dry_run: bool) {
     println!("\nProcesso concluido! Total: {} arquivos", arquivos.len());
 }
 
+fn limpar_desconhecido(pasta: &str, dry_run: bool) {
+    println!("Dandelion - Limpando pasta Desconhecido");
+    println!("-------------------------------------");
+    println!("Pasta: {}", pasta);
+    println!();
+
+    if !Path::new(pasta).exists() {
+        eprintln!("[ERRO] Pasta nao encontrada: {}", pasta);
+        return;
+    }
+
+    let mut arquivos: Vec<PathBuf> = WalkDir::new(pasta)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file() && eh_arquivo_musica(e.path()))
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    arquivos.sort();
+
+    if arquivos.is_empty() {
+        println!("[AVISO] Nenhum arquivo de musica encontrado em {}", pasta);
+        return;
+    }
+
+    println!("Arquivos a remover:");
+    for arquivo in &arquivos {
+        let nome = arquivo.file_name().unwrap().to_str().unwrap();
+        println!("  - {}", nome);
+    }
+    println!();
+
+    if dry_run {
+        println!("[DRY-RUN] {} arquivo(s) seriam removidos.", arquivos.len());
+        return;
+    }
+
+    match Confirm::new(&format!("Remover {} arquivo(s) da pasta Desconhecido?", arquivos.len()))
+        .with_default(false)
+        .prompt()
+    {
+        Ok(true) => {}
+        _ => {
+            println!("[CANCELADO] Nenhum arquivo foi removido.");
+            return;
+        }
+    }
+
+    let mut removidos = 0;
+    for arquivo in &arquivos {
+        let nome = arquivo.file_name().unwrap().to_str().unwrap();
+        match fs::remove_file(arquivo) {
+            Ok(_) => {
+                println!("  [OK] Removido: {}", nome);
+                removidos += 1;
+            }
+            Err(e) => eprintln!("  [ERRO] Falha ao remover {}: {}", nome, e),
+        }
+    }
+
+    println!("\nProcesso concluido! {} arquivo(s) removidos.", removidos);
+}
+
 fn eh_arquivo_musica(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         let ext = ext.to_str().unwrap().to_lowercase();
@@ -475,5 +556,255 @@ fn eh_arquivo_musica(path: &Path) -> bool {
         )
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+    use std::io::Write;
+
+    // ─── eh_arquivo_musica ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_musica_mp3() {
+        assert!(eh_arquivo_musica(Path::new("song.mp3")));
+    }
+
+    #[test]
+    fn test_musica_flac() {
+        assert!(eh_arquivo_musica(Path::new("song.flac")));
+    }
+
+    #[test]
+    fn test_musica_m4a() {
+        assert!(eh_arquivo_musica(Path::new("song.m4a")));
+    }
+
+    #[test]
+    fn test_musica_wav() {
+        assert!(eh_arquivo_musica(Path::new("song.wav")));
+    }
+
+    #[test]
+    fn test_musica_ogg() {
+        assert!(eh_arquivo_musica(Path::new("song.ogg")));
+    }
+
+    #[test]
+    fn test_musica_opus() {
+        assert!(eh_arquivo_musica(Path::new("song.opus")));
+    }
+
+    #[test]
+    fn test_musica_aac() {
+        assert!(eh_arquivo_musica(Path::new("song.aac")));
+    }
+
+    #[test]
+    fn test_musica_wma() {
+        assert!(eh_arquivo_musica(Path::new("song.wma")));
+    }
+
+    #[test]
+    fn test_extensao_maiuscula_valida() {
+        assert!(eh_arquivo_musica(Path::new("song.MP3")));
+        assert!(eh_arquivo_musica(Path::new("song.FLAC")));
+    }
+
+    #[test]
+    fn test_nao_musica_txt() {
+        assert!(!eh_arquivo_musica(Path::new("arquivo.txt")));
+    }
+
+    #[test]
+    fn test_nao_musica_jpg() {
+        assert!(!eh_arquivo_musica(Path::new("imagem.jpg")));
+    }
+
+    #[test]
+    fn test_nao_musica_pdf() {
+        assert!(!eh_arquivo_musica(Path::new("doc.pdf")));
+    }
+
+    #[test]
+    fn test_sem_extensao() {
+        assert!(!eh_arquivo_musica(Path::new("arquivo_sem_extensao")));
+    }
+
+    // ─── listar_musicas ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_listar_pasta_inexistente_nao_panics() {
+        // Não deve entrar em panic; apenas imprime erro
+        listar_musicas("/caminho/que/nao/existe");
+    }
+
+    #[test]
+    fn test_listar_pasta_vazia() {
+        let dir = tempdir();
+        listar_musicas(dir.path().to_str().unwrap());
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn test_listar_com_arquivos_musica() {
+        let dir = tempdir();
+        criar_arquivo(&dir, "musica1.mp3");
+        criar_arquivo(&dir, "musica2.flac");
+        criar_arquivo(&dir, "imagem.jpg"); // deve ser ignorado
+        listar_musicas(dir.path().to_str().unwrap());
+        cleanup_dir(&dir);
+    }
+
+    // ─── limpar_desconhecido ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_limpar_pasta_inexistente_nao_panics() {
+        limpar_desconhecido("/caminho/que/nao/existe", false);
+    }
+
+    #[test]
+    fn test_limpar_dry_run_nao_remove_arquivos() {
+        let dir = tempdir();
+        criar_arquivo(&dir, "musica1.mp3");
+        criar_arquivo(&dir, "musica2.flac");
+
+        limpar_desconhecido(dir.path().to_str().unwrap(), true);
+
+        // Em dry-run os arquivos devem continuar existindo
+        assert!(dir.path().join("musica1.mp3").exists());
+        assert!(dir.path().join("musica2.flac").exists());
+        cleanup_dir(&dir);
+    }
+
+    // ─── organizar_album ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_organizar_copia_arquivos() {
+        let base = tempdir();
+        let desconhecido = base.path().join("Desconhecido");
+        fs::create_dir_all(&desconhecido).unwrap();
+        criar_arquivo_em(&desconhecido, "faixa1.mp3");
+        criar_arquivo_em(&desconhecido, "faixa2.mp3");
+
+        organizar_album(
+            base.path().to_str().unwrap(),
+            "Artista Teste",
+            "Album Teste",
+            false, // dry_run
+            false, // mover
+            true,  // no_interactive
+            true,  // no_edit
+        );
+
+        let destino = base.path().join("Artista Teste - Album Teste");
+        assert!(destino.exists(), "Pasta de destino deve ser criada");
+        let arquivos: Vec<_> = fs::read_dir(&destino)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(arquivos.len(), 2, "Devem existir 2 arquivos copiados");
+        cleanup_dir(&base);
+    }
+
+    #[test]
+    fn test_organizar_dry_run_nao_cria_pasta() {
+        let base = tempdir();
+        let desconhecido = base.path().join("Desconhecido");
+        fs::create_dir_all(&desconhecido).unwrap();
+        criar_arquivo_em(&desconhecido, "faixa1.mp3");
+
+        organizar_album(
+            base.path().to_str().unwrap(),
+            "Artista DryRun",
+            "Album DryRun",
+            true,  // dry_run
+            false,
+            true,
+            true,
+        );
+
+        let destino = base.path().join("Artista DryRun - Album DryRun");
+        assert!(!destino.exists(), "Em dry-run a pasta nao deve ser criada");
+        cleanup_dir(&base);
+    }
+
+    #[test]
+    fn test_organizar_move_arquivos() {
+        let base = tempdir();
+        let desconhecido = base.path().join("Desconhecido");
+        fs::create_dir_all(&desconhecido).unwrap();
+        criar_arquivo_em(&desconhecido, "faixa1.mp3");
+
+        organizar_album(
+            base.path().to_str().unwrap(),
+            "Artista Move",
+            "Album Move",
+            false,
+            true, // mover
+            true,
+            true,
+        );
+
+        // Arquivo original deve ter sido removido da origem
+        assert!(!desconhecido.join("faixa1.mp3").exists(), "Arquivo deve ter sido movido");
+        cleanup_dir(&base);
+    }
+
+    // ─── renomear_musicas ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_renomear_pasta_inexistente_nao_panics() {
+        renomear_musicas("/caminho/inexistente", "Artista", false);
+    }
+
+    #[test]
+    fn test_renomear_dry_run_nao_altera_arquivos() {
+        let dir = tempdir();
+        criar_arquivo(&dir, "01 - musica.mp3");
+
+        renomear_musicas(dir.path().to_str().unwrap(), "Novo Artista", true);
+
+        assert!(dir.path().join("01 - musica.mp3").exists());
+        cleanup_dir(&dir);
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    fn tempdir() -> TempDir {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let path = std::env::temp_dir().join(format!("dandelion_test_{}", ts));
+        fs::create_dir_all(&path).unwrap();
+        TempDir { path }
+    }
+
+    fn criar_arquivo(dir: &TempDir, nome: &str) {
+        let mut f = File::create(dir.path().join(nome)).unwrap();
+        f.write_all(b"dummy").unwrap();
+    }
+
+    fn criar_arquivo_em(dir: &Path, nome: &str) {
+        let mut f = File::create(dir.join(nome)).unwrap();
+        f.write_all(b"dummy").unwrap();
+    }
+
+    fn cleanup_dir(dir: &TempDir) {
+        let _ = fs::remove_dir_all(dir.path());
     }
 }
